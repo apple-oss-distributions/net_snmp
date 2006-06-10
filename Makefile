@@ -1,101 +1,177 @@
 ##
 # Makefile for net-snmp
 ##
-# Project info
-Project               = net-snmp
-UserType              = Administration
-ToolType              = Commands
-GnuAfterInstall       = do-fixups install-startup install-plist
-Extra_Configure_Flags = --with-libwrap --with-defaults --prefix=/usr --with-persistent-directory=/var/db/net-snmp --with-mib-modules=host CPPFLAGS=-I/System/Library/Frameworks/System.framework/PrivateHeaders --sysconfdir=/etc
-Extra_Environment     = AR="$(SRCROOT)/ar.sh"
 
-# It's a GNU Source project
-include $(MAKEFILEPATH)/CoreOS/ReleaseControl/GNUSource.make
+# General project info
+Project		= net-snmp
+ProjectName	= net_snmp
+UserType	= Administration
+ToolType	= Commands
+Submission	= 19.1
+
+#
+# Settings for the net-snmp project.
+#
+Extra_Configure_Flags	= --disable-dependency-tracking \
+			--prefix=/usr \
+			--sysconfdir=/etc \
+			--with-persistent-directory=/var/db/net-snmp \
+			--with-defaults \
+			--with-mib-modules=host \
+			--with-out-mib-modules="mibII/icmp host/hr_swrun" \
+			--with-sys-contact="postmaster@example.com" \
+			--enable-mini-agent \
+			--without-kmem-usage
+#			--enable-developer
+#			--enable-ipv6
+
+Extra_CC_Flags		= -DBUILD=$(Submission) \
+			-DMACOSX_DEPLOYMENT_TARGET=10.4 \
+			-I/System/Library/Frameworks/System.framework/PrivateHeaders
+Extra_Environment	= AR="$(SRCROOT)/ar.sh"
+GnuAfterInstall		= install-macosx install-startup install-man
+
+# Startup / launchd items
+LAUNCHDDIR	= $(NSSYSTEMDIR)$(NSLIBRARYSUBDIR)/LaunchDaemons
+#LaunchdConfigs	= org.net-snmp.snmpd.plist
+SYSTEM_STARTUP_DIR = $(NSSYSTEMDIR)$(NSLIBRARYSUBDIR)/StartupItems
+StartupItem	= SNMP
+
+# Other configuration files
+CONFIGDIR	= /private/etc/
+CONFIGFILES	= snmpd.conf
+CONFIGTOOL	= $(USRBINDIR)/net-snmp-config
+
+# Binaries to strip
+STRIPPED_BINS	= encode_keychange snmpbulkget snmpbulkwalk snmpdelta snmpdf \
+			snmpget snmpget snmpgetnext snmpinform snmpnetstat \
+			snmpset snmpstatus snmptable snmptest snmptranslate \
+			snmptrap snmpusm snmpvacm snmpwalk
+STRIPPED_SBINS	= snmpd snmptrapd
+STRIPPED_LIBS	= libnetsnmp libnetsnmpagent libnetsnmphelpers libnetsnmpmibs
 
 
 # Automatic Extract & Patch
-AEP            = YES
-AEP_Project    = $(Project)
-AEP_Version    = 5.2.1
-AEP_ProjVers   = $(AEP_Project)-$(AEP_Version)
-AEP_Filename   = $(AEP_ProjVers).tar.gz
-AEP_ExtractDir = $(AEP_ProjVers)
-AEP_Patches    = NLS_TigerBuild.patch BO_darwin_snmp.patch NLS_PR-3962010.patch NLS_PR-4059242.patch NLS_wrap.patch NLS_PR-4133730.patch
-
-ifeq ($(suffix $(AEP_Filename)),.bz2)
-AEP_ExtractOption = j
-else
-AEP_ExtractOption = z
-endif
-
-# Extract the source.
-install_source::
-ifeq ($(AEP),YES)
-	$(TAR) -C $(SRCROOT) -$(AEP_ExtractOption)xf $(SRCROOT)/$(AEP_Filename)
-	$(RMDIR) $(SRCROOT)/$(AEP_Project)
-	$(MV) $(SRCROOT)/$(AEP_ExtractDir) $(SRCROOT)/$(AEP_Project)
-	for patchfile in $(AEP_Patches); do \
-		cd $(SRCROOT)/$(Project) && patch -p0 < $(SRCROOT)/patches/$$patchfile; \
-        done
-endif
+AEP		= YES
+AEP_Version	= 5.2.1
+AEP_Patches	= NLS_TigerBuild.patch BO_darwin_snmp.patch \
+			kernel_nlist.patch \
+			NLS_PR-3962010.patch NLS_PR-4059242.patch \
+			NLS_wrap.patch \
+			NLS_PR-4133730.patch NLS_PR-4269071.patch \
+			NLS_PR-3881250.patch NLS_PR-4046983.patch
 
 
-Install_Flags         = prefix=$(DSTROOT)/usr \
-                        exec_prefix=$(DSTROOT)/usr \
-                        bindir=$(DSTROOT)/usr/bin \
-                        sbindir=$(DSTROOT)/usr/sbin \
+# Local targets that must be defined before including the following
+# files to get the dependency order correct
+.PHONY: $(GnuAfterInstall)
+
+install::
+
+configure:: extract-source
+
+
+# Include common makefile targets for B&I
+include $(MAKEFILEPATH)/CoreOS/ReleaseControl/GNUSource.make
+include AEP.make
+
+# Override settings from above include
+DESTDIR	= $(DSTROOT)
+
+# This project must be built in the source directory because the real
+# project (with configure) is there.
+BuildDirectory	= $(Sources)
+
+# These need to be overridden to match the project's use of DESTDIR.
+#Install_Flags   = DESTDIR="$(DSTROOT)"
+
+Install_Flags	= prefix=$(DSTROOT)/usr \
+			exec_prefix=$(DSTROOT)/usr \
+			bindir=$(DSTROOT)/usr/bin \
+			sbindir=$(DSTROOT)/usr/sbin \
 			sysconfdir=$(DSTROOT)/etc \
 			datadir=$(DSTROOT)/usr/share \
 			includedir=$(DSTROOT)/usr/include/net-snmp \
 			libdir=$(DSTROOT)/usr/lib \
 			libexecdir=$(DSTROOT)/usr/libexec \
 			localstatedir=$(DSTROOT)/usr/share \
-        		mandir=$(DSTROOT)/usr/share/man \
-		        infodir=$(DSTROOT)/usr/share/info
+			mandir=$(DSTROOT)/usr/share/man \
+			infodir=$(DSTROOT)/usr/share/info
 
 Install_Target = install 
 
-do-fixups:
-	for foo in encode_keychange snmpbulkget snmpbulkwalk snmpdelta snmpdf snmpget snmpgetnext snmpinform snmpnetstat snmpset snmpstatus snmptable snmptest snmptranslate snmptrap snmpusm snmpvacm snmpwalk; \
+#
+# Post-install targets
+#
+install-macosx:
+	@echo "Reorganizing install for Mac OS X..."
+	if [ -d $(DSTROOT)/etc ]; then 				\
+		$(MKDIR) -m 755 $(DSTROOT)/private;		\
+		$(MV) $(DSTROOT)/etc $(DSTROOT)/private;	\
+	fi
+	if [ -d $(DSTROOT)/var ]; then 				\
+		$(MKDIR) -m 755 $(DSTROOT)/private;		\
+		$(MV) $(DSTROOT)/var $(DSTROOT)/private;	\
+	fi
+	@echo "Stripping unstripped binaries..."
+	for file in $(STRIPPED_BINS); \
 	do \
-		strip $(DSTROOT)/usr/bin/$${foo}; \
+		$(STRIP) $(DSTROOT)$(USRBINDIR)/$${file}; \
 	done
-	for foo in snmpd snmptrapd; \
+	for file in $(STRIPPED_SBINS); \
 	do \
-		strip $(DSTROOT)/usr/sbin/$${foo}; \
+		$(STRIP) $(DSTROOT)$(USRSBINDIR)/$${file}; \
 	done
-	for foo in libnetsnmp libnetsnmpagent libnetsnmphelpers \
-libnetsnmpmibs; \
+	for file in $(STRIPPED_LIBS); \
 	do \
-		strip -x $(DSTROOT)/usr/lib/$${foo}.$(AEP_Version).dylib; \
-		rm -f $(DSTROOT)/usr/lib/$${foo}.5.dylib; \
-		mv $(DSTROOT)/usr/lib/$${foo}.$(AEP_Version).dylib $(DSTROOT)/usr/lib/$${foo}.5.dylib; \
-		ln -s $${foo}.5.dylib $(DSTROOT)/usr/lib/$${foo}.$(AEP_Version).dylib; \
+		$(STRIP) -x $(DSTROOT)$(USRLIBDIR)/$${file}.$(AEP_Version).dylib; \
+		$(LN) -sf $${file}.$(AEP_Version).dylib $(DSTROOT)$(USRLIBDIR)/$${file}.5.dylib; \
 	done
-	find  $(DSTROOT)/usr/include/net-snmp -type f | xargs chmod 644
-	find  $(DSTROOT)/usr/share/snmp -type f| xargs chmod 644
-	rm -f $(DSTROOT)/usr/lib/*.a $(DSTROOT)/usr/lib/*.la
-	ln -s net-snmp $(DSTROOT)/usr/include/ucd-snmp 
-	find $(DSTROOT)/usr/share/man/ -type f | xargs chmod 644
-	mkdir -p $(DSTROOT)/private/etc/
-	cp snmpd.conf $(DSTROOT)/private/etc/snmpd.conf
-	mv $(DSTROOT)/usr/bin/net-snmp-config $(DSTROOT)/usr/bin/net-snmp-config.old
-	cat $(DSTROOT)/usr/bin/net-snmp-config.old | sed "s/-arch ppc//g" | sed "s/-arch i386//g" > $(DSTROOT)/usr/bin/net-snmp-config
-	chmod 755 $(DSTROOT)/usr/bin/net-snmp-config
-	rm -f $(DSTROOT)/usr/bin/net-snmp-config.old
+	$(FIND) $(DSTROOT)$(USRINCLUDEDIR)/net-snmp -type f -exec chmod 644 {} \;
+	$(FIND) $(DSTROOT)$(SHAREDIR)/snmp -type f -exec chmod 644 {} \;
+	$(RM) $(DSTROOT)$(USRLIBDIR)/*.a $(DSTROOT)$(USRLIBDIR)/*.la
+	$(LN) -s net-snmp $(DSTROOT)$(USRINCLUDEDIR)/ucd-snmp 
+	$(FIND) $(DSTROOT)$(MANDIR) -type f -exec chmod 644 {} \;
+	@echo "Eliminating build architecture flags..."
+	$(MV) $(DSTROOT)$(CONFIGTOOL) $(DSTROOT)$(CONFIGTOOL).old
+	$(SED) -Ee 's/-arch [-_a-z0-9]{3,10}//g' $(DSTROOT)$(CONFIGTOOL).old > $(DSTROOT)$(CONFIGTOOL)
+	$(CHMOD) 755 $(DSTROOT)$(CONFIGTOOL)
+	$(RM) $(DSTROOT)$(CONFIGTOOL).old
+	@echo "Installing snmpd configuration files..."
+	$(INSTALL_DIRECTORY) $(DSTROOT)$(CONFIGDIR)
+	for file in $(CONFIGFILES); \
+	do \
+		$(INSTALL_FILE) $${file} $(DSTROOT)$(CONFIGDIR); \
+		if [ "${file##*.}" != "default" ]; then \
+			$(INSTALL_FILE) $${file} $(DSTROOT)$(CONFIGDIR)$${file}.default; \
+		fi; \
+	done
 
 install-startup:
-	@mkdir -p $(DSTROOT)/System/Library/StartupItems/SNMP/Resources/English.lproj
-	$(INSTALL) -c -m 555 $(SRCROOT)/SNMP $(DSTROOT)/System/Library/StartupItems/SNMP
-	$(INSTALL) -c -m 444 $(SRCROOT)/StartupParameters.plist $(DSTROOT)/System/Library/StartupItems/SNMP
-	$(INSTALL) -c -m 444 $(SRCROOT)/Localizable.strings $(DSTROOT)/System/Library/StartupItems/SNMP/Resources/English.lproj
+ifdef LaunchdConfigs
+	@echo "Installing launchd configuration files..."
+	$(INSTALL_DIRECTORY) $(DSTROOT)$(LAUNCHDDIR)
+	$(INSTALL_FILE) $(LaunchdConfigs) $(DSTROOT)$(LAUNCHDDIR)
+endif
+ifdef StartupItem
+	@echo "Installing StartupItem..."
+	$(INSTALL_DIRECTORY) $(DSTROOT)$(SYSTEM_STARTUP_DIR)/$(StartupItem)
+	$(INSTALL_SCRIPT) $(StartupItem) $(DSTROOT)$(SYSTEM_STARTUP_DIR)/$(StartupItem)
+	$(INSTALL_FILE) StartupParameters.plist $(DSTROOT)$(SYSTEM_STARTUP_DIR)/$(StartupItem)
+	$(INSTALL_DIRECTORY) $(DSTROOT)$(SYSTEM_STARTUP_DIR)/$(StartupItem)/Resources/English.lproj
+	$(INSTALL_FILE) Localizable.strings $(DSTROOT)$(SYSTEM_STARTUP_DIR)/$(StartupItem)/Resources/English.lproj
+endif
 
-OSV     = $(DSTROOT)/usr/local/OpenSourceVersions
-OSL     = $(DSTROOT)/usr/local/OpenSourceLicenses
+#
+# Install any man pages at the top-level directory or its "man" subdirectory
+#
+ManPages := $(wildcard *.[1-9] man/*.[1-9])
 
-install-plist:
-	$(MKDIR) $(OSV)
-	$(INSTALL_FILE) $(SRCROOT)/net_snmp.plist $(OSV)/net_snmp.plist
-	$(MKDIR) $(OSL)
-	$(INSTALL_FILE) $(SRCROOT)/net_snmp.txt $(OSL)/net_snmp.txt
-
+install-man:
+ifdef ManPages
+	for _page in $(ManPages); do					\
+		_section_dir=$(Install_Man)/man$${_page##*\.};		\
+		$(INSTALL_DIRECTORY) $(DSTROOT)$${_section_dir};	\
+		$(INSTALL_FILE) $${_page} $(DSTROOT)$${_section_dir};	\
+	done
+endif
